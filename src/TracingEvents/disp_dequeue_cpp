@@ -1,0 +1,56 @@
+#include "dispatch.hpp"
+BlockDequeueEvent::BlockDequeueEvent(double abstime, std::string op, uint64_t _tid, uint64_t _q_id, uint64_t _item, uint64_t _ctxt, uint32_t _ref, uint32_t _coreid, std::string procname)
+:EventBase(abstime, DISP_DEQ_EVENT, op, _tid, _coreid, procname),
+BlockInfo(_q_id, _item, _ref),
+FuncInfo(_ctxt, -1, -1, -1)
+{
+    duplicate = false;
+    executed = false;
+    invoke = nullptr;
+}
+
+
+void BlockDequeueEvent::decode_event(bool is_verbose, std::ofstream &outfile)
+{
+    EventBase::decode_event(is_verbose, outfile);
+    outfile << "\n\t_qid " << std::hex << q_id;
+    outfile << "\n\t_item " << std::hex << item;
+    outfile << "\n\t_vtable " << std::hex << vtable_ptr;
+    outfile << "\n\t_invoke " << std::hex << invoke_ptr;
+    outfile << "\n\t_func " << std::hex << func_ptr;
+
+    if (desc.size())
+        outfile << "\n\t_desc" << desc;
+
+    EventBase *root = get_event_peer();
+    if (root) 
+        outfile << "\n\tenqueue by " << std::hex << root->get_tid() << " at " << std::fixed << std::setprecision(1) << root->get_abstime() << std::endl;
+    if (invoke)
+        outfile << "\n\tinvoked by " << std::hex << invoke->get_tid() << " at " << std::fixed << std::setprecision(1) << invoke->get_abstime() << std::endl;
+
+    outfile << "\n\tnested " << nested_level;
+    outfile << std::endl;
+}
+
+void BlockDequeueEvent::streamout_event(std::ofstream &outfile)
+{
+    EventBase::streamout_event(outfile);
+    outfile << "_qid" << std::hex << q_id;
+    outfile << "_item" << std::hex << item;
+
+    if (func_ptr)
+        outfile << "_func" << std::hex << func_ptr;
+    if (invoke_ptr)
+        outfile << "_invoke" << std::hex << invoke_ptr;
+    if (desc.size())
+        outfile << "_desc" << desc;
+
+    EventBase *root = get_event_peer();
+    if (root) 
+        outfile << "\n\tEnqueued by " << std::hex << root->get_tid() << " at " << std::fixed << std::setprecision(1) << root->get_abstime();
+
+    if (invoke)
+        outfile << "\n\tInvoked by " << std::hex << invoke->get_tid() << " at " << std::fixed << std::setprecision(1) << invoke->get_abstime();
+
+    outfile << std::endl;
+}

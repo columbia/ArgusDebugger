@@ -1,0 +1,140 @@
+#include "parser.hpp"
+#include "wait.hpp"
+
+namespace Parse
+{
+    WaitParser::WaitParser(std::string filename)
+    :Parser(filename)
+    {
+        wait_events.clear();
+    }
+    
+    bool WaitParser::set_info(WaitEvent *wait_event, uint64_t pid,
+        uint64_t deadline, uint64_t wait_result)
+    {
+        wait_event->set_pid(lo(pid));
+        wait_event->set_wait_result(wait_result);
+        return true;
+    }
+
+    bool WaitParser::new_wait_event(std::string opname, double abstime,
+        std::istringstream &iss)
+    {
+        uint64_t disc[3] = {0};
+        uint64_t wait_event, tid, coreid;
+        std::string procname;
+        if (!(iss >> std::hex >> wait_event >> disc[0] >> disc[1] >> disc[2] \
+            >> tid >> coreid))
+            return false;
+
+        if (!getline(iss >> std::ws, procname) || !procname.size())
+            procname = ""; 
+
+        if (wait_events.find(tid) != wait_events.end()) {
+            outfile << "Second wait event for the same tid at " << std::fixed << std::setprecision(1) << abstime << std::endl;
+            return false;
+        }
+        //assert(wait_events.find(tid) == wait_events.end());
+        WaitEvent *new_evw = new WaitEvent(abstime, "MACH_wait", tid, wait_event,
+            (uint32_t)coreid, procname);
+        if (!new_evw) {
+            std::cerr << "OOM " << __func__ << std::endl;
+            exit(EXIT_FAILURE);
+        }
+
+        {
+            char s[32] = "";
+            int idx = 0;
+            LittleEndDecoder::decode64(disc[0], s, &idx); 
+            LittleEndDecoder::decode64(disc[1], s, &idx);
+            LittleEndDecoder::decode64(disc[2], s, &idx);
+            // remove tailing '.'s
+            for (int i = idx - 1; i >= 0; i--) {
+                if (s[i] != '.')
+                    break;
+                s[i] = '\0';
+            }
+            new_evw->set_wait_resource(s);
+        }
+
+        local_event_list.push_back(new_evw);
+        wait_events[tid] = new_evw;
+        return true;
+    }    
+    
+    bool WaitParser::finish_wait_event(std::string opname, double abstime,
+        std::istringstream &iss)
+    {
+        uint64_t wait_event, pid, deadline, wait_result, tid, coreid;
+        if (!(iss >> std::hex >> wait_event >> pid >> deadline >> wait_result \
+            >> tid >> coreid))
+            return false;
+    
+        if (wait_events.find(tid) == wait_events.end()) {
+            //outfile << "Error : missing wait reason for wait event at ";
+            //outfile << std::fixed << std::setprecision(1) << abstime << std::endl;
+            std::string procname;
+
+            if (!getline(iss >> std::ws, procname) || !procname.size())
+                procname = "";
+
+            WaitEvent *wait_evt = new WaitEvent(abstime, opname, tid,
+                wait_event, (uint32_t)coreid, procname);
+
+            if (!wait_evt) {
+                std::cerr << "OOM " << __func__ << std::endl;
+                exit(EXIT_FAILURE);
+            }
+
+            set_info(wait_evt, pid, deadline, wait_result);
+            wait_evt->set_complete();
+            local_event_list.push_back(wait_evt);
+            return false;
+        }
+
+        //assert(wait_events.find(tid) != wait_events.end());
+        WaitEvent * wait_evt = wait_events[tid];
+        if (wait_event != wait_evt->get_wait_event()) {
+            outfile << "Error : mismathed wait event at ";
+            outfile << std::fixed << std::setprecision(1) << abstime << std::endl;
+            wait_events.erase(tid);
+            return false;
+        }
+
+        assert(wait_event == wait_evt->get_wait_event());
+        wait_evt->override_timestamp(abstime);
+        set_info(wait_evt, pid, deadline, wait_result);
+        wait_events.erase(tid);
+        wait_evt->set_complete();
+        return true;
+    }
+    
+    void WaitParser::process()
+    {
+        std::string line, deltatime, opname;
+        double abstime;
+        bool ret = false;
+
+        while(getline(infile, line)) {
+            std::istringstream iss(line);
+
+            if (!(iss >> abstime >> deltatime >> opname)) {
+                outfile << line << std::endl;
+                continue;
+            }
+
+            ret = false;
+            if (opname == "ARGUS_WAIT_REASON") {
+                ret = new_wait_event(opname, abstime, iss);
+            } else if (opname == "ARGUS_WAIT") {
+                ret = finish_wait_event(opname, abstime, iss);
+            } else {
+                std::cerr << "Error: unkown opname" << std::endl;
+            }
+
+            if (ret == false)
+                outfile << line << std::endl;
+        }
+        // check wait_events
+    }
+}
